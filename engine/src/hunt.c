@@ -138,7 +138,7 @@ static void report(Worker *w, uint64_t seed)
     char line[8192];
     int n = 0;
     Pos sp = w->c.spawn;
-    n += snprintf(line + n, sizeof line - n, "{\"type\":\"hit\",\"version\":\"%s\",\"seed\":%lld,\"score\":%.2f,\"odds\":%.4g,"
+    n += snprintf(line + n, sizeof line - n, "{\"type\":\"hit\",\"version\":\"%s\",\"seed\":\"%lld\",\"score\":%.2f,\"odds\":%.4g,"
         "\"spawn\":[%d,%d],\"tags\":[", mc2str(cfg.mc), (long long)seed, total, pow(10, total), sp.x, sp.z);
     int first = 1;
     for (int d = 0; d < DETECTOR_COUNT; d++)
