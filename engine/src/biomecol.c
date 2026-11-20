@@ -16,13 +16,13 @@ int main(int argc, char **argv)
     setupGenerator(&g, mc, 0);
     applySeed(&g, DIM_OVERWORLD, seed);
     int surf = -999;
-    if (mc >= MC_1_18) {
-        TerrainNoise tn;
+    {
+        static TerrainNoise tn;
         setupTerrainNoise(&tn, mc, 0);
         initTerrainNoise(&tn, seed, DIM_OVERWORLD);
-        surf = samplePreliminarySurfaceLevel(&tn, x, z);
+        if (mc >= MC_1_18) surf = samplePreliminarySurfaceLevel(&tn, x, z);
         printf("{\"solidTop\": %d, ", sfSolidTop(&tn, x, z));
-    } else printf("{");
+    }
     printf("\"x\": %d, \"z\": %d, \"preliminarySurface\": %d, \"byY\": {", x, z, surf);
     int first = 1, last = -1;
     for (int y = 320; y >= -64; y -= 4) {

@@ -4,16 +4,18 @@ static int floordiv4(int v) { return v >> 2; } // arithmetic shift = floor divis
 
 int sfSolidTop(TerrainNoise *tn, int x, int z)
 {
-    enum { COLMIN = 0, COLMAX = 48, N = COLMAX - COLMIN + 1 };
-    double ds00[N], ds01[N], ds10[N], ds11[N];
+    // 1.18+: y -64..320 = 48 cells of 8; before: y 0..256 = 32 cells of 8.
+    const int modern = tn->g.mc >= MC_1_18;
+    const int colMax = modern ? 48 : 32, minY = modern ? -64 : 0;
+    double ds00[49], ds01[49], ds10[49], ds11[49];
     int cx = floordiv4(x), cz = floordiv4(z);
-    sampleNoiseColumn(tn, cx, cz, COLMIN, COLMAX, ds00);
-    sampleNoiseColumn(tn, cx, cz + 1, COLMIN, COLMAX, ds01);
-    sampleNoiseColumn(tn, cx + 1, cz, COLMIN, COLMAX, ds10);
-    sampleNoiseColumn(tn, cx + 1, cz + 1, COLMIN, COLMAX, ds11);
+    sampleNoiseColumn(tn, cx, cz, 0, colMax, ds00);
+    sampleNoiseColumn(tn, cx, cz + 1, 0, colMax, ds01);
+    sampleNoiseColumn(tn, cx + 1, cz, 0, colMax, ds10);
+    sampleNoiseColumn(tn, cx + 1, cz + 1, 0, colMax, ds11);
     // With the flag set, generateColumn stops at the first solid block from the top and returns the air block above it.
-    int airAbove = generateColumn(NULL, ds00, ds01, ds10, ds11, COLMIN, COLMAX, 8, (x & 3) / 4.0, (z & 3) / 4.0,
-        INTERP_1_18, -64, 1);
+    int airAbove = generateColumn(NULL, ds00, ds01, ds10, ds11, 0, colMax, 8, (x & 3) / 4.0, (z & 3) / 4.0,
+        modern ? INTERP_1_18 : INTERP_PRE_1_18, minY, 1);
     return airAbove - 1;
 }
 

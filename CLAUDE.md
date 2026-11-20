@@ -12,7 +12,11 @@ This folder is the public code repo. The private project files sit one level up:
 |---|---|
 | `engine/cubiomes/` | git submodule: the **xpple/cubiomes** fork (MIT). Never edit it here; pin a commit and report bugs upstream |
 | `engine/src/` | SeedFindr's own C code. A file with `main()` becomes `engine/build/<name>.exe`; other `.c` files are linked into every program |
-| `engine/build.mjs` | builds with Zig's Clang (`zig cc`), caching objects in `engine/build/obj/` |
+| `engine/build.mjs` | builds with Zig's Clang (`zig cc`), caching objects in `engine/build/obj/` (own sources rebuild when any `src/*.h` changes) |
+| `engine/src/sfctx.*` | per-seed context: lazily computed generators, spawn, terrain, End heights (cached per 48-bit structure seed) |
+| `engine/src/sfdetect.*` | the detector table (id, stage, kind, tail, version, confirm-in-game flag, function). Add detectors here |
+| `engine/src/sfcalib.*` | calibration (hit rates, quantiles + exact tails) and scoring (-log10 chance) |
+| `engine/src/hunt.c`, `map.c` | the hunt engine (threads, funnel, sisters, gates, JSON) and the PNG map tool (`sfpng.c`) |
 | `app/` | Electron + React + TypeScript app (Phase 5, not started) |
 
 ## Commands
@@ -22,6 +26,12 @@ git submodule update --init          # after cloning
 node engine/build.mjs [program]      # build (first build ~100 s, then only changed files)
 engine/build/probe.exe 1.16.1 12345  # what the engine sees for one seed (JSON)
 engine/build/probe.exe bench 26.3 3  # single-thread seeds/s for stage 1 and 2
+engine/build/hunt.exe --version 1.16.1 --seconds 10        # hunt on all threads, JSON lines (see the header of src/hunt.c)
+engine/build/hunt.exe --version 26.3 --require "village_dist<=48" --only village_dist
+engine/build/hunt.exe --version 26.3 --test 7593177223396  # score given seeds (detector test cases)
+engine/build/hunt.exe --version 26.3 --calibrate 100000    # rates + distributions -> %LOCALAPPDATA%\SeedFindr\calib\26.3.json
+engine/build/hunt.exe --list                               # detectors as JSON
+engine/build/map.exe 26.3 <seed> out.png [--size 512 --scale 4]  # biome + relief map with structures and spawn
 engine/build/biomecol.exe 26.3 <seed> <x> <z>              # biome by height + solid ground top at one column
 node engine/tests/spotcheck.mjs 26.3 12345 8675309         # engine vs the official server (~30-60 s per seed)
 node app/checker/realcheck.mjs 1.16.1 <seed> [label:x:z]   # ask the server directly (spawn, /locate)

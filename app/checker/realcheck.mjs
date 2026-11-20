@@ -97,7 +97,7 @@ export const acceptEula = () => fs.writeFileSync(EULA_FILE, `Minecraft EULA acce
  *                spot (returns the structure in that region if it exists) and, once per label, from 0,0.
  * @param labels  extra labels to locate from 0,0 (default: the labels in `points`).
  */
-export async function realCheck(version, seed, { points = [], labels } = {}) {
+export async function realCheck(version, seed, { points = [], labels, heights = [] } = {}) {
   if (!eulaAccepted()) throw new Error('The Minecraft EULA must be accepted first.')
   const t0 = Date.now()
   const { jar, java } = await serverJar(version)
@@ -144,7 +144,7 @@ export async function realCheck(version, seed, { points = [], labels } = {}) {
   }
   const posOut = await waitFor(/Pos.*?\[.*?\]|has the following entity data: \[/, from, 30000)
   const m = posOut.match(/\[(-?[\d.]+)d, (-?[\d.]+)d, (-?[\d.]+)d\]/)
-  if (m) result.spawn = { x: Math.floor(+m[1]), z: Math.floor(+m[3]) }
+  if (m) result.spawn = { x: Math.floor(+m[1]), y: Math.floor(+m[2]), z: Math.floor(+m[3]) }
 
   const mod = modern(version)
   const locate = async (label, x, z) => {
@@ -156,6 +156,19 @@ export async function realCheck(version, seed, { points = [], labels } = {}) {
     const out = await waitFor(/nearest .*? is at \[|Could not find|Unknown|Incorrect|no structure|There is no|error/i, from, 300000)
     const p = out.match(/is at \[(-?\d+), [^,]+, (-?\d+)\]/)
     return p ? [+p[1], +p[2]] : null
+  }
+  // Surface heights (1.19.4+ only: `positioned over`): forceload the chunks, give them time, then read the heightmap.
+  if (heights.length) {
+    result.heights = []
+    for (const h of heights) send(`execute in minecraft:${h.dim} run forceload add ${h.x} ${h.z}`)
+    await new Promise((r) => setTimeout(r, 8000))
+    for (const h of heights) {
+      const from = log.length
+      send(`execute in minecraft:${h.dim} positioned ${h.x} 0 ${h.z} positioned over ${h.map ?? "world_surface"} summon minecraft:marker run data get entity @s Pos`)
+      const out = await waitFor(/entity data: \[|not loaded|Unknown|Incorrect|error/i, from, 60000)
+      const p = out.match(/\[(-?[\d.]+)d, (-?[\d.]+)d, (-?[\d.]+)d\]/)
+      result.heights.push({ ...h, y: p ? Math.floor(+p[2]) : null })
+    }
   }
   for (const label of labels ?? [...new Set(points.map((p) => p.label))]) result.fromOrigin[label] = await locate(label, 0, 0)
   for (const pt of points) {

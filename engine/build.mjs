@@ -43,10 +43,13 @@ const FLAGS = ['-O3', '-fwrapv', '-DNDEBUG', '-D_WIN32', '-mpopcnt', '-w'] // no
 const zig = findZig()
 fs.mkdirSync(OBJ, { recursive: true })
 
+// SeedFindr's own sources are rebuilt when they or any header in engine/src changed (the headers are few and shared).
+const srcHeadersTime = Math.max(0, ...fs.readdirSync(SRC).filter((f) => f.endsWith('.h')).map((f) => fs.statSync(path.join(SRC, f)).mtimeMs))
+
 function compile(src) {
   const rel = path.relative(ENGINE, src).replace(/[\\/]/g, '_').replace(/\.c$/, '.o')
   const obj = path.join(OBJ, rel)
-  if (fs.existsSync(obj) && fs.statSync(obj).mtimeMs >= fs.statSync(src).mtimeMs) return obj
+  if (fs.existsSync(obj) && fs.statSync(obj).mtimeMs >= Math.max(fs.statSync(src).mtimeMs, srcHeadersTime)) return obj
   const r = spawnSync(zig, ['cc', ...FLAGS, '-I', LIB, '-c', src, '-o', obj], { stdio: 'inherit' })
   if (r.status !== 0) throw new Error('compile failed: ' + src)
   return obj
