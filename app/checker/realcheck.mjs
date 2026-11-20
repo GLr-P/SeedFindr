@@ -51,7 +51,7 @@ async function javaExe(major) {
     path.join(CACHE, `java-${major}.zip`),
   )
   fs.mkdirSync(dir, { recursive: true })
-  const r = spawnSync('tar', ['-xf', zip, '-C', dir], { stdio: 'inherit' })
+  const r = spawnSync(path.join(process.env.SystemRoot || 'C:\Windows', 'System32', 'tar.exe'), ['-xf', zip, '-C', dir], { stdio: 'inherit' })
   if (r.status !== 0) throw new Error('could not unpack Java')
   fs.rmSync(zip)
   return find()
@@ -88,15 +88,17 @@ const TARGETS = [
   ['bastion_remnant', 'the_nether', 'bastion_remnant', 'minecraft:bastion_remnant'],
 ]
 
-async function main() {
-  const [version, seed] = process.argv.slice(2)
-  if (!version || !seed) throw new Error('usage: realcheck.mjs <version> <seed> [--accept-eula]')
-  if (process.argv.includes('--accept-eula')) fs.writeFileSync(EULA_FILE, `Minecraft EULA accepted by the user on ${new Date().toISOString()}\n`)
-  if (!fs.existsSync(EULA_FILE)) {
-    console.error('The Minecraft EULA (https://aka.ms/MinecraftEULA) must be accepted first: run once with --accept-eula.')
-    process.exit(3)
-  }
+export const eulaAccepted = () => fs.existsSync(EULA_FILE)
+export const acceptEula = () => fs.writeFileSync(EULA_FILE, `Minecraft EULA accepted by the user on ${new Date().toISOString()}\n`)
 
+/**
+ * Runs the official server for one seed and returns ground truth.
+ * @param points  [{ label, x, z }]: predicted structures to confirm. For each, the server runs `locate` from that
+ *                spot (returns the structure in that region if it exists) and, once per label, from 0,0.
+ * @param labels  extra labels to locate from 0,0 (default: the labels in `points`).
+ */
+export async function realCheck(version, seed, { points = [], labels } = {}) {
+  if (!eulaAccepted()) throw new Error('The Minecraft EULA must be accepted first.')
   const t0 = Date.now()
   const { jar, java } = await serverJar(version)
   const exe = await javaExe(java)
@@ -105,7 +107,8 @@ async function main() {
   fs.writeFileSync(
     path.join(world, 'server.properties'),
     [`level-seed=${seed}`, 'online-mode=false', `server-port=${25600 + Math.floor(Math.random() * 300)}`, 'view-distance=3',
-      'simulation-distance=3', 'spawn-protection=0', 'max-players=1', 'motd=SeedFindr check', 'sync-chunk-writes=false'].join('\n') + '\n',
+      'simulation-distance=3', 'spawn-protection=0', 'max-players=1', 'motd=SeedFindr check', 'sync-chunk-writes=false',
+      'max-tick-time=-1'].join('\n') + '\n', // no watchdog: a far /locate can take over a minute in one tick
   )
 
   const proc = spawn(exe, ['-Xmx2G', '-jar', jar, 'nogui'], { cwd: world, stdio: ['pipe', 'pipe', 'pipe'] })
@@ -119,33 +122,45 @@ async function main() {
   proc.stderr.on('data', onData)
   const waitFor = (re, from = log.length, ms = 300000) =>
     new Promise((res, rej) => {
-      const w = { re, from, res }
+      const timer = setTimeout(() => rej(new Error('timeout waiting for ' + re + '\n' + log.slice(-2000))), ms)
+      const w = { re, from, res: (v) => { clearTimeout(timer); res(v) } }
       waiters.push(w)
       onData('')
-      setTimeout(() => rej(new Error('timeout waiting for ' + re + '\n' + log.slice(-2000))), ms)
     })
   const send = (cmd) => proc.stdin.write(cmd + '\n')
 
   await waitFor(/Done \(/, 0)
   const tReady = Date.now()
-  const result = { version, seed, structures: {} }
+  const result = { version, seed, fromOrigin: {}, confirmed: [] }
 
   // Spawn: summon a marker entity at the console's position (the world spawn) and read its position.
   let from = log.length
-  send('summon minecraft:armor_stand ~ ~ ~ {Tags:["sf"],NoGravity:1b,Invisible:1b}')
-  send('data get entity @e[tag=sf,limit=1] Pos')
+  if (modern(version)) {
+    // 1.17+: no spawn chunks stay loaded, so summon and read in one command.
+    send('execute summon minecraft:marker run data get entity @s Pos')
+  } else {
+    send('summon minecraft:armor_stand ~ ~ ~ {Tags:["sf"],NoGravity:1b,Invisible:1b}')
+    send('data get entity @e[tag=sf,limit=1] Pos')
+  }
   const posOut = await waitFor(/Pos.*?\[.*?\]|has the following entity data: \[/, from, 30000)
   const m = posOut.match(/\[(-?[\d.]+)d, (-?[\d.]+)d, (-?[\d.]+)d\]/)
   if (m) result.spawn = { x: Math.floor(+m[1]), z: Math.floor(+m[3]) }
 
   const mod = modern(version)
-  for (const [label, dim, oldName, newName] of TARGETS) {
-    from = log.length
-    const cmd = mod ? `locate structure ${newName}` : `locate ${oldName}`
-    send(`execute in minecraft:${dim} positioned 0 64 0 run ${cmd}`)
-    const out = await waitFor(/nearest .*? is at \[|Could not find|Unknown|Incorrect|no structure|There is no/i, from, 120000)
+  const locate = async (label, x, z) => {
+    const t = TARGETS.find((t) => t[0] === label)
+    if (!t) return undefined
+    const from = log.length
+    const cmd = mod ? `locate structure ${t[3]}` : `locate ${t[2]}`
+    send(`execute in minecraft:${t[1]} positioned ${x} 64 ${z} run ${cmd}`)
+    const out = await waitFor(/nearest .*? is at \[|Could not find|Unknown|Incorrect|no structure|There is no|error/i, from, 300000)
     const p = out.match(/is at \[(-?\d+), [^,]+, (-?\d+)\]/)
-    result.structures[label] = p ? [+p[1], +p[2]] : null
+    return p ? [+p[1], +p[2]] : null
+  }
+  for (const label of labels ?? [...new Set(points.map((p) => p.label))]) result.fromOrigin[label] = await locate(label, 0, 0)
+  for (const pt of points) {
+    const at = await locate(pt.label, pt.x, pt.z)
+    result.confirmed.push({ ...pt, game: at, match: !!at && Math.abs(at[0] - pt.x) <= 16 && Math.abs(at[1] - pt.z) <= 16 })
   }
   send('stop')
   await new Promise((r) => proc.on('exit', r))
@@ -159,10 +174,30 @@ async function main() {
   }
   result.seconds = { startup: (tReady - t0) / 1000, total: (Date.now() - t0) / 1000 }
   fs.rmSync(world, { recursive: true, force: true })
-  console.log(JSON.stringify(result, null, 2))
+  return result
 }
 
-main().catch((e) => {
-  console.error(e.message)
-  process.exit(1)
-})
+// CLI: node realcheck.mjs <version> <seed> [--accept-eula] [label:x:z ...]
+if (import.meta.url === `file:///${process.argv[1].replace(/\\/g, '/')}`) {
+  const args = process.argv.slice(2)
+  const [version, seed] = args
+  if (args.includes('--accept-eula')) acceptEula()
+  if (!version || !seed) {
+    console.error('usage: realcheck.mjs <version> <seed> [--accept-eula] [label:x:z ...]')
+    process.exit(2)
+  }
+  if (!eulaAccepted()) {
+    console.error('The Minecraft EULA (https://aka.ms/MinecraftEULA) must be accepted first: run once with --accept-eula.')
+    process.exit(3)
+  }
+  const points = args.slice(2).filter((a) => /^\w+:-?\d+:-?\d+$/.test(a)).map((a) => {
+    const [label, x, z] = a.split(':')
+    return { label, x: +x, z: +z }
+  })
+  realCheck(version, seed, { points, labels: points.length ? undefined : TARGETS.map((t) => t[0]) })
+    .then((r) => console.log(JSON.stringify(r, null, 2)))
+    .catch((e) => {
+      console.error(e.message)
+      process.exit(1)
+    })
+}

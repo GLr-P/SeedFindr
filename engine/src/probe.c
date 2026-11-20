@@ -2,6 +2,7 @@
 //   probe <version> <seed>      JSON: spawn, nearby structures, strongholds, End centre
 //   probe bench <version> [s]   seeds/second for stage 1 (structure position) and stage 2 (biome check)
 #include "finders.h"
+#include "sfterrain.h"
 #include "util.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -22,7 +23,7 @@ static int bydist(const void *a, const void *b)
 }
 
 // Every viable structure of one type within `radius` blocks of (0,0), nearest first; returns the count.
-static int nearby(int st, int mc, uint64_t seed, Generator *g, int radius, Pos *out, int max)
+static int nearby(int st, int mc, uint64_t seed, Generator *g, TerrainNoise *tn, int radius, Pos *out, int max)
 {
     StructureConfig sc;
     if (!getStructureConfig(st, mc, &sc)) return 0;
@@ -33,20 +34,20 @@ static int nearby(int st, int mc, uint64_t seed, Generator *g, int radius, Pos *
             Pos p;
             if (n >= max || !getStructurePos(st, mc, seed, rx, rz, &p)) continue;
             if (dist2(p) > (long long)radius * radius) continue;
-            if (!isViableStructurePos(st, g, p.x, p.z, 0)) continue;
+            if (!sfViableStructure(st, g, tn, p.x, p.z)) continue;
             out[n++] = p;
         }
     qsort(out, n, sizeof *out, bydist);
     return n;
 }
 
-static void printNearby(const char *name, const int *types, size_t count, int mc, uint64_t seed, Generator *g, int radius)
+static void printNearby(const char *name, const int *types, size_t count, int mc, uint64_t seed, Generator *g, TerrainNoise *tn, int radius)
 {
     printf("  \"%s\": {", name);
     int first = 1;
     for (size_t i = 0; i < count; i++) {
         Pos ps[64];
-        int n = nearby(types[i], mc, seed, g, radius, ps, 64);
+        int n = nearby(types[i], mc, seed, g, tn, radius, ps, 64);
         if (!n) continue;
         printf("%s\n    \"%s\": [", first ? "" : ",", struct2str(types[i]));
         for (int k = 0; k < n && k < 6; k++) printf("%s[%d, %d]", k ? ", " : "", ps[k].x, ps[k].z);
@@ -62,6 +63,14 @@ static int probe(int mc, uint64_t seed)
     setupGenerator(&g, mc, 0);
     applySeed(&g, DIM_OVERWORLD, seed);
 
+    static TerrainNoise tnbuf;
+    TerrainNoise *tn = NULL;
+    if (mc >= MC_1_18) {
+        setupTerrainNoise(&tnbuf, mc, 0);
+        initTerrainNoise(&tnbuf, seed, DIM_OVERWORLD);
+        tn = &tnbuf;
+    }
+
     uint64_t rng;
     Pos est = estimateSpawn(&g, &rng);
     Pos sp = getSpawn(&g);
@@ -69,7 +78,7 @@ static int probe(int mc, uint64_t seed)
     printf("  \"spawn\": {\"x\": %d, \"z\": %d, \"biome\": \"%s\", \"estimate\": [%d, %d]},\n",
         sp.x, sp.z, biome2str(mc, getBiomeAt(&g, 4, sp.x >> 2, 64 >> 2, sp.z >> 2)), est.x, est.z);
 
-    printNearby("overworld", OVERWORLD_TYPES, sizeof OVERWORLD_TYPES / sizeof *OVERWORLD_TYPES, mc, seed, &g, 2000);
+    printNearby("overworld", OVERWORLD_TYPES, sizeof OVERWORLD_TYPES / sizeof *OVERWORLD_TYPES, mc, seed, &g, tn, 2000);
     printf("  \"strongholds\": [");
     StrongholdIter sh;
     initFirstStronghold(&sh, mc, seed);
@@ -82,7 +91,7 @@ static int probe(int mc, uint64_t seed)
     Generator gn;
     setupGenerator(&gn, mc, 0);
     applySeed(&gn, DIM_NETHER, seed);
-    printNearby("nether", NETHER_TYPES, sizeof NETHER_TYPES / sizeof *NETHER_TYPES, mc, seed, &gn, 1000);
+    printNearby("nether", NETHER_TYPES, sizeof NETHER_TYPES / sizeof *NETHER_TYPES, mc, seed, &gn, NULL, 1000);
 
     // End centre: surface height of the main island at a few points (0 = no terrain).
     static const int pts[][2] = { {0, 0}, {40, 0}, {0, 40}, {-40, 0}, {0, -40}, {80, 80} };
