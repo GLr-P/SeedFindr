@@ -1,0 +1,5 @@
+engine/build/
+node_modules/
+out/
+release/
+*.log
